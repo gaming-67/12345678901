@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>REALM: EXPLORER</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+  #canvas { display: block; }
+  #hud { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+  #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 20px; height: 20px; }
+  #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,0.8); }
+  #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
+  #crosshair::after { width: 100%; height: 2px; top: 50%; transform: translateY(-50%); }
+
+  #stats { position: absolute; top: 20px; left: 20px; color: #00ff88; font-size: 13px; letter-spacing: 1px; line-height: 1.8; }
+  #stats span { color: #fff; }
+
+  #stamina-container { position: absolute; bottom: 40px; left: 20px; width: 200px; height: 10px; background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,136,0.3); }
+  #stamina-bar { height: 100%; background: #00ff88; width: 100%; transition: width 0.1s; }
+
+  #minimap { position: absolute; bottom: 20px; right: 20px; width: 160px; height: 160px; border: 2px solid rgba(0,255,136,0.4); border-radius: 50%; overflow: hidden; background: rgba(0,0,0,0.6); }
+  #controls { position: absolute; bottom: 60px; left: 20px; color: rgba(255,255,255,0.5); font-size: 11px; line-height: 1.6; }
+  .key { background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; color: #fff; }
+
+  #overlay { position: fixed; inset: 0; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+  #startBtn { background: transparent; border: 1px solid #00ff88; color: #00ff88; padding: 15px 40px; cursor: pointer; text-transform: uppercase; letter-spacing: 4px; }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <h1 style="color:white; letter-spacing:10px; margin-bottom:20px;">REALM</h1>
+  <button id="startBtn">Enter World</button>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<div id="hud">
+  <div id="crosshair"></div>
+  <div id="stats">
+    SCORE <span id="score">0</span> / 20<br>
+    POS &nbsp;<span id="pos">0, 0, 0</span><br>
+    LIGHT <span id="lightStat">OFF</span>
+  </div>
+  
+  <div id="stamina-container"><div id="stamina-bar"></div></div>
+  
+  <div id="controls">
+    <span class="key">W A S D</span> Move | <span class="key">SHIFT</span> Sprint<br>
+    <span class="key">L</span> Flashlight | <span class="key">SPACE</span> Jump
+  </div>
+
+  <div id="minimap"><canvas id="mapCanvas" width="160" height="160"></canvas></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ===================== CORE SETUP =====================
+const canvas = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+const scene = new THREE.Scene();
+const clock = new THREE.Clock();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1500);
+
+// Game Logic Variables
+let score = 0;
+let stamina = 100;
+let dayTime = 0.4;
+let started = false;
+const orbs = [];
+const ruins = [];
+const WORLD_SIZE = 600;
+
+// ===================== LIGHTING =====================
+const ambientLight = new THREE.AmbientLight(0x202040, 0.2);
+scene.add(ambientLight);
+
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(1024, 1024);
+scene.add(sunLight);
+
+const flashlight = new THREE.SpotLight(0xfff9e0, 0, 60, Math.PI/7, 0.4, 1);
+flashlight.castShadow = true;
+scene.add(flashlight);
+scene.add(flashlight.target);
+
+// ===================== TERRAIN =====================
+function getHeight(x, z) {
+  let h = Math.sin(x * 0.02) * Math.cos(z * 0.02) * 10;
+  h += Math.sin(x * 0.05) * 2;
+  return h;
+}
+
+const terrainGeo = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, 100, 100);
+terrainGeo.rotateX(-Math.PI / 2);
+const posArr = terrainGeo.attributes.position;
+for(let i=0; i<posArr.count; i++) {
+  posArr.setY(i, getHeight(posArr.getX(i), posArr.getZ(i)));
+}
+terrainGeo.computeVertexNormals();
+const terrainMat = new THREE.MeshLambertMaterial({ color: 0x223322 });
+const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+terrain.receiveShadow = true;
+terrain.receiveShadow = true;
+scene.add(terrain);
+
+// ===================== RUINS & ORBS =====================
+const pillarGeo = new THREE.BoxGeometry(2, 15, 2);
+const pillarMat = new THREE.MeshLambertMaterial({ color: 0x444444 });
+
+for(let i=0; i<30; i++) {
+  const x = (Math.random() - 0.5) * 500;
+  const z = (Math.random() - 0.5) * 500;
+  const h = getHeight(x, z);
+  
+  if (Math.abs(x) > 20) { // Keep spawn clear
+    const p = new THREE.Mesh(pillarGeo, pillarMat);
+    p.position.set(x, h + 5, z);
+    p.rotation.y = Math.random() * Math.PI;
+    p.castShadow = true;
+    p.receiveShadow = true;
+    scene.add(p);
+  }
+}
+
+const orbGeo = new THREE.SphereGeometry(0.5, 16, 16);
+const orbMat = new THREE.MeshStandardMaterial({ color: 0x00ff88, emissive: 0x00ff88, emissiveIntensity: 2 });
+for(let i=0; i<20; i++) {
+  const orb = new THREE.Mesh(orbGeo, orbMat);
+  const x = (Math.random() - 0.5) * 450;
+  const z = (Math.random() - 0.5) * 450;
+  orb.position.set(x, getHeight(x,z) + 2, z);
+  scene.add(orb);
+  orbs.push(orb);
+}
+
+// ===================== PLAYER LOGIC =====================
+const player = { pos: new THREE.Vector3(0, 5, 0), vel: new THREE.Vector3(), yaw: 0, pitch: 0, onGround: false };
+const keys = {};
+
+document.addEventListener('keydown', e => { 
+  keys[e.code] = true; 
+  if(e.code === 'KeyL') {
+    flashlight.intensity = flashlight.intensity === 0 ? 4 : 0;
+    document.getElementById('lightStat').textContent = flashlight.intensity > 0 ? "ON" : "OFF";
+  }
+});
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+canvas.addEventListener('click', () => { if(started) canvas.requestPointerLock(); });
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement === canvas) {
+    player.yaw -= e.movementX * 0.002;
+    player.pitch = Math.max(-1.5, Math.min(1.5, player.pitch - e.movementY * 0.002));
+  }
+});
+
+function updatePlayer(dt) {
+  const isSprinting = (keys['ShiftLeft'] || keys['ShiftRight']) && stamina > 0;
+  if (isSprinting) stamina -= 40 * dt;
+  else if (stamina < 100) stamina += 15 * dt;
+  stamina = Math.max(0, Math.min(100, stamina));
+  document.getElementById('stamina-bar').style.width = stamina + '%';
+
+  const speed = isSprinting ? 18 : 8;
+  const move = new THREE.Vector3();
+  if (keys['KeyW']) move.z -= 1;
+  if (keys['KeyS']) move.z += 1;
+  if (keys['KeyA']) move.x -= 1;
+  if (keys['KeyD']) move.x += 1;
+  
+  move.applyAxisAngle(new THREE.Vector3(0,1,0), player.yaw);
+  if(move.length() > 0) move.normalize().multiplyScalar(speed);
+  
+  player.vel.x = move.x;
+  player.vel.z = move.z;
+  if(keys['Space'] && player.onGround) { player.vel.y = 12; player.onGround = false; }
+  
+  player.vel.y -= 30 * dt;
+  player.pos.addScaledVector(player.vel, dt);
+  
+  const floor = getHeight(player.pos.x, player.pos.z) + 2;
+  if(player.pos.y < floor) { player.pos.y = floor; player.vel.y = 0; player.onGround = true; }
+
+  camera.position.copy(player.pos);
+  camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+
+  flashlight.position.copy(camera.position);
+  const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+  flashlight.target.position.copy(camera.position).add(dir);
+}
+
+function updateWorld(dt) {
+  dayTime = (dayTime + dt * 0.01) % 1;
+  const sunAngle = dayTime * Math.PI * 2;
+  sunLight.position.set(Math.cos(sunAngle) * 200, Math.sin(sunAngle) * 200, 100);
+  sunLight.intensity = Math.max(0, Math.sin(sunAngle) * 2);
+  
+  orbs.forEach((orb, i) => {
+    orb.position.y += Math.sin(clock.elapsedTime * 2 + i) * 0.01;
+    if(player.pos.distanceTo(orb.position) < 2) {
+      scene.remove(orb);
+      orbs.splice(i, 1);
+      score++;
+      document.getElementById('score').textContent = score;
+    }
+  });
+
+  document.getElementById('pos').textContent = `${Math.round(player.pos.x)}, ${Math.round(player.pos.y)}, ${Math.round(player.pos.z)}`;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1);
+  updatePlayer(dt);
+  updateWorld(dt);
+  renderer.render(scene, camera);
+}
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  document.getElementById('overlay').style.display = 'none';
+  started = true;
+  canvas.requestPointerLock();
+  animate();
+});
+</script>
+</body>
+</html>
