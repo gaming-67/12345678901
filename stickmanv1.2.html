@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stickman JS Platformer - Full Game</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { background: #87CEEB; box-shadow: 0 0 20px rgba(0,0,0,0.8); border-radius: 4px; }
+        
+        /* UI Elements */
+        #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; text-shadow: 1px 1px 2px black; line-height: 1.5; z-index: 5; }
+        #scoreBoard { position: absolute; top: 20px; right: 20px; color: gold; font-size: 24px; font-weight: bold; text-shadow: 2px 2px 4px black; z-index: 5; }
+        
+        /* Menu Overlay */
+        #menuScreen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.85); display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; z-index: 10; text-align: center; }
+        #menuTitle { font-size: 48px; font-weight: bold; margin-bottom: 10px; color: #3CB371; text-shadow: 2px 2px 4px black; }
+        #menuSubtext { font-size: 20px; margin-bottom: 30px; max-width: 400px; }
+        
+        .btn { padding: 15px 30px; font-size: 24px; cursor: pointer; background: #3CB371; border: 3px solid white; border-radius: 8px; color: white; font-weight: bold; transition: 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .btn:hover { background: #2E8B57; transform: scale(1.05); }
+        .btn:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+    <div id="ui" style="display: none;">
+        <b>Arrow Keys / WASD</b>: Move<br>
+        <b>Up / W / Space</b>: Jump (Double Jump!)<br>
+        Jump on red enemies to defeat them!
+    </div>
+    <div id="scoreBoard" style="display: none;">Score: 0</div>
+    
+    <div id="menuScreen">
+        <div id="menuTitle">STICKMAN ADVENTURE</div>
+        <div id="menuSubtext">Collect coins, avoid lava, and stomp enemies to reach the goal!</div>
+        <button class="btn" id="startBtn">Play Game</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const menuScreen = document.getElementById('menuScreen');
+const menuTitle = document.getElementById('menuTitle');
+const menuSubtext = document.getElementById('menuSubtext');
+const startBtn = document.getElementById('startBtn');
+const ui = document.getElementById('ui');
+const scoreBoard = document.getElementById('scoreBoard');
+
+canvas.width = 800;
+canvas.height = 400;
+
+// Game Constants
+const gravity = 0.8;
+const friction = 0.8;
+let gameState = "menu"; // "menu", "playing", "won", "dead"
+let cameraX = 0;
+let score = 0;
+
+// Player Setup
+const startX = 50;
+const startY = 300;
+const player = {
+    x: startX, y: startY, width: 20, height: 40,
+    velX: 0, velY: 0, speed: 6, jumpStrength: 12,
+    grounded: false, jumpCount: 0, maxJumps: 2
+};
+
+// Level Design
+const platforms = [
+    { x: 0, y: 380, width: 400, height: 20, type: 'static' },
+    { x: 500, y: 320, width: 100, height: 20, type: 'static' },
+    { x: 700, y: 260, width: 300, height: 20, type: 'static' }, // Lengthened for enemy patrol
+    { x: 1100, y: 200, width: 150, height: 20, type: 'moving', minX: 1100, maxX: 1400, speed: 2, dir: 1 }, 
+    { x: 1600, y: 250, width: 100, height: 20, type: 'static' },
+    { x: 1800, y: 380, width: 400, height: 20, type: 'static' } 
+];
+
+// Hazards
+const lavas = [
+    { x: 400, y: 380, width: 1400, height: 20 }
+];
+
+// Collectibles
+let coins = [];
+
+// Enemies
+let enemies = [];
+
+// Win Condition
+const goal = { x: 2050, y: 330, width: 50, height: 50 };
+
+// Input Handling
+const keys = {};
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if ((e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'Space') && gameState === "playing") {
+        if (player.jumpCount < player.maxJumps) {
+            player.velY = -player.jumpStrength;
+            player.grounded = false;
+            player.jumpCount++;
+        }
+    }
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// Button Listeners
+startBtn.addEventListener('click', () => {
+    initGame();
+});
+
+function initGame() {
+    // Reset Player
+    player.x = startX;
+    player.y = startY;
+    player.velX = 0;
+    player.velY = 0;
+    score = 0;
+    
+    // Reset Level Objects
+    coins = [
+        { x: 540, y: 280, radius: 10, collected: false },
+        { x: 850, y: 220, radius: 10, collected: false },
+        { x: 1250, y: 150, radius: 10, collected: false }, 
+        { x: 1640, y: 200, radius: 10, collected: false }
+    ];
+    
+    enemies = [
+        { x: 800, y: 240, width: 20, height: 20, speed: 1.5, dir: 1, minX: 700, maxX: 950, dead: false },
+        { x: 1900, y: 360, width: 20, height: 20, speed: 2, dir: -1, minX: 1800, maxX: 2100, dead: false }
+    ];
+
+    // UI Updates
+    scoreBoard.innerText = "Score: " + score;
+    menuScreen.style.display = "none";
+    ui.style.display = "block";
+    scoreBoard.style.display = "block";
+    
+    gameState = "playing";
+}
+
+function showMenu(title, subtext, btnText) {
+    gameState = "menu";
+    ui.style.display = "none";
+    scoreBoard.style.display = "none";
+    menuScreen.style.display = "flex";
+    
+    menuTitle.innerText = title;
+    menuSubtext.innerText = subtext;
+    startBtn.innerText = btnText;
+    
+    // Reset keys to prevent auto-moving on restart
+    for(let key in keys) keys[key] = false; 
+}
+
+function drawStickman(x, y) {
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x + 10, y + 8, 5, 0, Math.PI * 2); // Head
+    ctx.moveTo(x + 10, y + 13); ctx.lineTo(x + 10, y + 28); // Body
+    ctx.moveTo(x - 5, y + 18); ctx.lineTo(x + 25, y + 18); // Arms
+    
+    if (!player.grounded) {
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x + 5, y + 38);
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x + 15, y + 38);
+    } else {
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x, y + 40); 
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x + 20, y + 40);
+    }
+    ctx.stroke();
+}
+
+function drawEnemy(e) {
+    if (e.dead) return;
+    ctx.fillStyle = "#DC143C"; // Crimson red
+    ctx.fillRect(e.x, e.y, e.width, e.height);
+    
+    // Angry Eyes
+    ctx.fillStyle = "white";
+    ctx.fillRect(e.x + 3, e.y + 4, 4, 4);
+    ctx.fillRect(e.x + 13, e.y + 4, 4, 4);
+    ctx.fillStyle = "black";
+    // Eyes look in direction of travel
+    let pupilOffset = e.dir === 1 ? 2 : 0;
+    ctx.fillRect(e.x + 3 + pupilOffset, e.y + 4, 2, 4);
+    ctx.fillRect(e.x + 13 + pupilOffset, e.y + 4, 2, 4);
+}
+
+function checkCollision(rect1, rect2) {
+    return (
+        rect1.x < rect2.x + rect2.width &&
+        rect1.x + rect1.width > rect2.x &&
+        rect1.y < rect2.y + rect2.height &&
+        rect1.y + rect1.height > rect2.y
+    );
+}
+
+function update() {
+    if (gameState !== "playing") {
+        requestAnimationFrame(update);
+        return;
+    }
+
+    // Horizontal Movement
+    if (keys['ArrowRight'] || keys['KeyD']) {
+        if (player.velX < player.speed) player.velX += 1;
+    }
+    if (keys['ArrowLeft'] || keys['KeyA']) {
+        if (player.velX > -player.speed) player.velX -= 1;
+    }
+
+    // Physics
+    player.velX *= friction;
+    player.velY += gravity;
+    player.grounded = false;
+
+    // Platforms
+    platforms.forEach(p => {
+        if (p.type === 'moving') {
+            p.x += p.speed * p.dir;
+            if (p.x > p.maxX || p.x < p.minX) p.dir *= -1; 
+        }
+        if (checkCollision(player, p)) {
+            if (player.velY > 0 && player.y + player.height - player.velY <= p.y) {
+                player.grounded = true;
+                player.velY = 0;
+                player.y = p.y - player.height;
+                player.jumpCount = 0; 
+                if (p.type === 'moving') player.x += p.speed * p.dir;
+            }
+        }
+    });
+
+    // Enemies Update & Collision
+    enemies.forEach(e => {
+        if (e.dead) return;
+        
+        // Patrol movement
+        e.x += e.speed * e.dir;
+        if (e.x > e.maxX || e.x < e.minX) e.dir *= -1;
+
+        if (checkCollision(player, e)) {
+            // Did player land on top of the enemy?
+            if (player.velY > 0 && player.y + player.height - player.velY < e.y + 10) {
+                e.dead = true;
+                player.velY = -10; // Bounce off the enemy!
+                player.jumpCount = 1; // Allow another jump after bounce
+                score += 200;
+                scoreBoard.innerText = "Score: " + score;
+            } else {
+                // Touched from the side = death
+                showMenu("GAME OVER", "You touched an enemy!", "Try Again");
+            }
+        }
+    });
+
+    player.x += player.velX;
+    player.y += player.velY;
+
+    // Bounds and Lava
+    if (player.x < 0) { player.x = 0; player.velX = 0; }
+    if (player.y > canvas.height) showMenu("GAME OVER", "You fell off the screen!", "Try Again");
+    for (let l of lavas) {
+        if (checkCollision(player, l)) showMenu("GAME OVER", "You fell in the lava!", "Try Again");
+    }
+
+    // Coins
+    coins.forEach(c => {
+        if (!c.collected) {
+            if (player.x < c.x + c.radius && player.x + player.width > c.x - c.radius &&
+                player.y < c.y + c.radius && player.y + player.height > c.y - c.radius) {
+                c.collected = true;
+                score += 100;
+                scoreBoard.innerText = "Score: " + score;
+            }
+        }
+    });
+
+    // Goal Collision
+    if (checkCollision(player, goal)) {
+        showMenu("YOU WIN!", "Final Score: " + score, "Play Again");
+    }
+
+    // Camera
+    cameraX = Math.max(0, player.x - canvas.width / 3);
+
+    draw();
+    requestAnimationFrame(update);
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Only draw the game world if we aren't heavily obscuring it with the menu 
+    // (It draws behind the transparent black menu for a cool effect)
+    ctx.save();
+    ctx.translate(-cameraX, 0);
+
+    // Draw Platforms
+    platforms.forEach(p => {
+        ctx.fillStyle = p.type === 'moving' ? "#4682B4" : "#3CB371"; 
+        ctx.fillRect(p.x, p.y, p.width, p.height);
+        ctx.fillStyle = p.type === 'moving' ? "#2F4F4F" : "#8B4513";
+        ctx.fillRect(p.x, p.y + 10, p.width, p.height - 10);
+    });
+
+    // Draw Lava
+    ctx.fillStyle = "#FF4500";
+    lavas.forEach(l => ctx.fillRect(l.x, l.y, l.width, l.height));
+
+    // Draw Coins
+    ctx.fillStyle = "gold";
+    coins.forEach(c => {
+        if (!c.collected) {
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        }
+    });
+
+    // Draw Enemies
+    enemies.forEach(e => drawEnemy(e));
+
+    // Draw Goal
+    ctx.fillStyle = "gold";
+    ctx.fillRect(goal.x, goal.y, goal.width, goal.height);
+    ctx.fillStyle = "white";
+    ctx.font = "20px Arial";
+    ctx.fillText("GOAL", goal.x, goal.y - 10);
+
+    // Draw Player
+    drawStickman(player.x, player.y);
+
+    ctx.restore();
+}
+
+// Start the game loop immediately so it can render the background behind the menu
+requestAnimationFrame(update);
+// Render the initial static frame
+draw();
+</script>
+</body>
+</html>
