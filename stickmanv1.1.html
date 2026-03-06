@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stickman JS Platformer - Advanced</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; }
+        canvas { background: #87CEEB; box-shadow: 0 0 20px rgba(0,0,0,0.8); border-radius: 4px; }
+        #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; text-shadow: 1px 1px 2px black; line-height: 1.5; }
+        #scoreBoard { position: absolute; top: 20px; right: 20px; color: gold; font-size: 24px; font-weight: bold; text-shadow: 2px 2px 4px black; }
+        #message { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 40px; font-weight: bold; display: none; text-shadow: 2px 2px 4px black; text-align: center; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <b>Arrow Keys / WASD</b>: Move<br>
+        <b>Up / W / Space</b>: Jump (Press twice to <b>Double Jump</b>!)<br>
+        Grab the coins and reach the goal.
+    </div>
+    <div id="scoreBoard">Score: 0</div>
+    <div id="message">You Win!<br><span id="finalScore" style="font-size:24px;"></span></div>
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const messageEl = document.getElementById('message');
+const scoreBoard = document.getElementById('scoreBoard');
+const finalScoreEl = document.getElementById('finalScore');
+
+canvas.width = 800;
+canvas.height = 400;
+
+// Game Constants
+const gravity = 0.8;
+const friction = 0.8;
+let gameState = "playing"; 
+let cameraX = 0;
+let score = 0;
+
+// Player Setup
+const startX = 50;
+const startY = 300;
+const player = {
+    x: startX,
+    y: startY,
+    width: 20,
+    height: 40,
+    velX: 0,
+    velY: 0,
+    speed: 6,
+    jumpStrength: 12,
+    grounded: false,
+    jumpCount: 0,
+    maxJumps: 2
+};
+
+// Level Design (Now with moving platforms)
+const platforms = [
+    { x: 0, y: 380, width: 400, height: 20, type: 'static' },
+    { x: 500, y: 320, width: 100, height: 20, type: 'static' },
+    { x: 700, y: 260, width: 100, height: 20, type: 'static' },
+    // Moving Platform
+    { x: 900, y: 200, width: 150, height: 20, type: 'moving', minX: 900, maxX: 1200, speed: 2, dir: 1 }, 
+    { x: 1400, y: 250, width: 100, height: 20, type: 'static' },
+    { x: 1600, y: 380, width: 400, height: 20, type: 'static' } 
+];
+
+// Hazards
+const lavas = [
+    { x: 400, y: 380, width: 1200, height: 20 }
+];
+
+// Collectibles
+let coins = [
+    { x: 540, y: 280, radius: 10, collected: false },
+    { x: 740, y: 220, radius: 10, collected: false },
+    { x: 1050, y: 150, radius: 10, collected: false }, // Above moving platform
+    { x: 1440, y: 200, radius: 10, collected: false }
+];
+
+// Win Condition
+const goal = { x: 1850, y: 330, width: 50, height: 50 };
+
+// Input Handling
+const keys = {};
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    
+    // Jump logic on keydown ensures you can't just hold the button
+    if ((e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'Space') && gameState === "playing") {
+        if (player.jumpCount < player.maxJumps) {
+            player.velY = -player.jumpStrength;
+            player.grounded = false;
+            player.jumpCount++;
+        }
+    }
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+function resetGame() {
+    player.x = startX;
+    player.y = startY;
+    player.velX = 0;
+    player.velY = 0;
+    score = 0;
+    coins.forEach(c => c.collected = false);
+    scoreBoard.innerText = "Score: " + score;
+    gameState = "playing";
+    messageEl.style.display = "none";
+}
+
+function drawStickman(x, y) {
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x + 10, y + 8, 5, 0, Math.PI * 2); // Head
+    ctx.moveTo(x + 10, y + 13);
+    ctx.lineTo(x + 10, y + 28); // Body
+    ctx.moveTo(x - 5, y + 18);
+    ctx.lineTo(x + 25, y + 18); // Arms
+    
+    // Animate legs slightly based on jumping/falling
+    if (!player.grounded) {
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x + 5, y + 38);
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x + 15, y + 38);
+    } else {
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x, y + 40); 
+        ctx.moveTo(x + 10, y + 28); ctx.lineTo(x + 20, y + 40);
+    }
+    ctx.stroke();
+}
+
+function checkCollision(rect1, rect2) {
+    return (
+        rect1.x < rect2.x + rect2.width &&
+        rect1.x + rect1.width > rect2.x &&
+        rect1.y < rect2.y + rect2.height &&
+        rect1.y + rect1.height > rect2.y
+    );
+}
+
+function update() {
+    if (gameState === "won") return;
+    if (gameState === "dead") resetGame();
+
+    // Horizontal Movement
+    if (keys['ArrowRight'] || keys['KeyD']) {
+        if (player.velX < player.speed) player.velX += 1;
+    }
+    if (keys['ArrowLeft'] || keys['KeyA']) {
+        if (player.velX > -player.speed) player.velX -= 1;
+    }
+
+    // Physics
+    player.velX *= friction;
+    player.velY += gravity;
+    player.grounded = false;
+
+    // Update Moving Platforms
+    platforms.forEach(p => {
+        if (p.type === 'moving') {
+            p.x += p.speed * p.dir;
+            if (p.x > p.maxX || p.x < p.minX) p.dir *= -1; // Reverse direction
+        }
+    });
+
+    // Platform Collisions
+    for (let p of platforms) {
+        if (checkCollision(player, p)) {
+            // Landing on top
+            if (player.velY > 0 && player.y + player.height - player.velY <= p.y) {
+                player.grounded = true;
+                player.velY = 0;
+                player.y = p.y - player.height;
+                player.jumpCount = 0; // Reset double jumps
+                
+                // Carry player if on a moving platform
+                if (p.type === 'moving') {
+                    player.x += p.speed * p.dir;
+                }
+            }
+        }
+    }
+
+    player.x += player.velX;
+    player.y += player.velY;
+
+    // Bounds and Hazards
+    if (player.x < 0) { player.x = 0; player.velX = 0; }
+    if (player.y > canvas.height) gameState = "dead";
+    for (let l of lavas) {
+        if (checkCollision(player, l)) gameState = "dead";
+    }
+
+    // Coin Collection
+    coins.forEach(c => {
+        if (!c.collected) {
+            // Simple bounding box for the circle
+            if (player.x < c.x + c.radius && player.x + player.width > c.x - c.radius &&
+                player.y < c.y + c.radius && player.y + player.height > c.y - c.radius) {
+                c.collected = true;
+                score += 100;
+                scoreBoard.innerText = "Score: " + score;
+            }
+        }
+    });
+
+    // Goal Collision
+    if (checkCollision(player, goal)) {
+        gameState = "won";
+        finalScoreEl.innerText = "Final Score: " + score;
+        messageEl.style.display = "block";
+    }
+
+    // Camera Logic
+    cameraX = Math.max(0, player.x - canvas.width / 3);
+
+    draw();
+    requestAnimationFrame(update);
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(-cameraX, 0);
+
+    // Draw Platforms
+    platforms.forEach(p => {
+        ctx.fillStyle = p.type === 'moving' ? "#4682B4" : "#3CB371"; // Blue for moving, green for static
+        ctx.fillRect(p.x, p.y, p.width, p.height);
+        ctx.fillStyle = p.type === 'moving' ? "#2F4F4F" : "#8B4513";
+        ctx.fillRect(p.x, p.y + 10, p.width, p.height - 10);
+    });
+
+    // Draw Lava
+    ctx.fillStyle = "#FF4500";
+    lavas.forEach(l => ctx.fillRect(l.x, l.y, l.width, l.height));
+
+    // Draw Coins
+    ctx.fillStyle = "gold";
+    coins.forEach(c => {
+        if (!c.collected) {
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        }
+    });
+
+    // Draw Goal
+    ctx.fillStyle = "gold";
+    ctx.fillRect(goal.x, goal.y, goal.width, goal.height);
+    ctx.fillStyle = "white";
+    ctx.font = "20px Arial";
+    ctx.fillText("GOAL", goal.x, goal.y - 10);
+
+    // Draw Player
+    drawStickman(player.x, player.y);
+
+    ctx.restore();
+}
+
+update();
+</script>
+</body>
+</html>
